@@ -133,6 +133,75 @@ curl -X POST http://127.0.0.1:2048/v1/chat/completions \
 
 ---
 
+## TTS (文字转语音)
+
+### 语音合成接口
+
+**端点**: `POST /v1/audio/speech`
+
+与 OpenAI TTS API 兼容，支持单人和多人语音合成。
+
+#### 支持的参数
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `model` | String | TTS 模型 ID (必需) |
+| `input` | String | 要合成的文本 (单人模式) |
+| `voice` | String | 语音名称 (如 "Zephyr") |
+| `speakers` | Array | 多人模式的说话人数组 |
+| `style_instructions` | String | 风格指令 |
+| `response_format` | String | 音频格式 (mp3, wav, etc.) |
+| `speed` | Number | 语速 (0.25-4.0) |
+
+#### 可用模型
+
+- `gemini-2.5-pro-preview-tts` - 高质量 TTS
+- `gemini-2.5-flash-preview-tts` - 快速 TTS
+
+#### 可用语音
+
+Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, 等多种语音选择。
+
+#### 示例请求
+
+```bash
+# 单人语音合成
+curl -X POST http://127.0.0.1:2048/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-pro-preview-tts",
+    "input": "Hello, this is a test of text to speech.",
+    "voice": "Zephyr",
+    "style_instructions": "Read aloud in a warm and friendly tone"
+  }' --output speech.mp3
+
+# 多人对话合成
+curl -X POST http://127.0.0.1:2048/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-pro-preview-tts",
+    "speakers": [
+      {"text": "Hello! Welcome to our podcast.", "voice": "Zephyr"},
+      {"text": "Thanks for having me!", "voice": "Kore"}
+    ],
+    "style_instructions": "Read aloud in a warm, welcoming tone"
+  }' --output dialog.mp3
+```
+
+### 语音列表
+
+**端点**: `GET /v1/audio/voices`
+
+返回可用语音列表。
+
+### TTS 模型列表
+
+**端点**: `GET /v1/audio/models`
+
+返回可用 TTS 模型列表。
+
+---
+
 ## 客户端配置
 
 ### Python (OpenAI SDK)

@@ -10,12 +10,12 @@ from asyncio import Event, Future, Lock, Queue, Task
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from fastapi import HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from playwright.async_api import Locator
 
 from api_utils.context_types import QueueItem
 from logging_utils import set_request_id, set_source
-from models import ChatCompletionRequest
+from models import ChatCompletionRequest, TTSRequest
 
 from .error_utils import (
     client_cancelled,
@@ -166,9 +166,9 @@ class QueueManager:
     async def process_request(self, request_item: QueueItem) -> None:
         """Process a single request item."""
         req_id = str(request_item["req_id"])
-        request_data: ChatCompletionRequest = request_item["request_data"]
+        request_data = request_item["request_data"]  # Can be ChatCompletionRequest or TTSRequest
         http_request: Request = request_item["http_request"]
-        result_future: Future[Union[StreamingResponse, JSONResponse]] = request_item[
+        result_future: Future[Union[StreamingResponse, JSONResponse, Response]] = request_item[
             "result_future"
         ]
 
@@ -187,6 +187,20 @@ class QueueManager:
                 self.request_queue.task_done()
             return
 
+        # Check if this is a TTS request
+        request_type = request_item.get("request_type", "chat")
+        is_tts_request = request_type == "tts" or isinstance(request_data, TTSRequest)
+
+        if is_tts_request:
+            # Handle TTS request separately
+            await self._process_tts_request(
+                req_id, request_data, http_request, result_future
+            )
+            if self.request_queue:
+                self.request_queue.task_done()
+            return
+
+        # Continue with chat request processing
         is_streaming_request = bool(request_data.stream)
         self.logger.info(
             f"[API] 开始处理请求 (流式: {'是' if is_streaming_request else '否'})"
@@ -363,6 +377,53 @@ class QueueManager:
         self.last_request_completion_time = time.time()
         if self.request_queue:
             self.request_queue.task_done()
+
+    async def _process_tts_request(
+        self,
+        req_id: str,
+        request_data: TTSRequest,
+        http_request: Request,
+        result_future: Future[Response],
+    ) -> None:
+        """Process a TTS request separately from chat requests."""
+        set_request_id(req_id)
+        set_source("TTS-WORKER")
+
+        self.logger.info(f"[TTS] 开始处理TTS请求 (Model: {request_data.model})")
+
+        # Import TTS processor
+        from api_utils.tts_processor import process_tts_request
+
+        try:
+            # Acquire processing lock for TTS as well
+            if not self.processing_lock:
+                self.logger.error("Processing lock is None!")
+                if not result_future.done():
+                    result_future.set_exception(
+                        server_error(req_id, "Internal error: Processing lock missing")
+                    )
+                return
+
+            async with self.processing_lock:
+                self.logger.debug("[TTS Lock] 成功获取任务锁")
+
+                await process_tts_request(
+                    req_id, request_data, http_request, result_future
+                )
+
+                self.logger.debug("[TTS Lock] 已释放任务锁")
+
+        except asyncio.CancelledError:
+            self.logger.info("[TTS] 请求已取消")
+            if not result_future.done():
+                result_future.cancel()
+            raise
+        except Exception as e:
+            self.logger.error(f"[TTS] 处理失败: {e}")
+            if not result_future.done():
+                result_future.set_exception(
+                    server_error(req_id, f"TTS processing error: {e}")
+                )
 
     async def _execute_request_logic(
         self,

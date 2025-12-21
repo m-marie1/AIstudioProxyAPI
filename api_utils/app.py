@@ -332,6 +332,7 @@ def create_app() -> FastAPI:
 
     from .routers import (
         add_api_key,
+        audio_speech,
         auth_files_router,
         cancel_request,
         chat_completions,
@@ -341,6 +342,8 @@ def create_app() -> FastAPI:
         get_queue_status,
         health_check,
         list_models,
+        list_tts_models,
+        list_tts_voices,
         model_capabilities_router,
         ports_router,
         proxy_router,
@@ -359,6 +362,11 @@ def create_app() -> FastAPI:
     app.post("/v1/cancel/{req_id}")(cancel_request)
     app.get("/v1/queue")(get_queue_status)
     app.websocket("/ws/logs")(websocket_log_endpoint)
+
+    # TTS endpoints (OpenAI compatible)
+    app.post("/v1/audio/speech")(audio_speech)
+    app.get("/v1/audio/voices")(list_tts_voices)
+    app.get("/v1/audio/models")(list_tts_models)
 
     # Model capabilities endpoint (single source of truth)
     app.include_router(model_capabilities_router)

@@ -34,6 +34,7 @@ from .operations import (
     save_error_snapshot,
 )
 from .page_controller import PageController
+from .tts_controller import TTSController
 
 __all__ = [
     # 初始化相关
@@ -61,6 +62,8 @@ __all__ = [
     "_verify_and_apply_ui_state",
     # Page Controller
     "PageController",
+    # TTS Controller
+    "TTSController",
     # Debug utilities (comprehensive error snapshots)
     "save_comprehensive_snapshot",
     "save_error_snapshot_enhanced",
