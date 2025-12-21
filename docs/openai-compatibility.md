@@ -20,6 +20,7 @@ AI Studio Proxy API 提供与 OpenAI API 最大程度的兼容性，使现有使
 |------|------|
 | `POST /v1/chat/completions` | 聊天完成，支持流式和非流式 |
 | `GET /v1/models` | 模型列表 |
+| `POST /v1/audio/speech` | TTS 语音合成 |
 
 ### ⚠️ 自定义端点
 
@@ -30,12 +31,15 @@ AI Studio Proxy API 提供与 OpenAI API 最大程度的兼容性，使现有使
 | `GET /v1/queue` | 队列状态 |
 | `POST /v1/cancel/{req_id}` | 取消请求 |
 | `/api/keys` | 密钥管理 |
+| `GET /v1/audio/voices` | TTS 语音列表 |
+| `GET /v1/audio/models` | TTS 模型列表 |
 
 ### ❌ 不支持
 
 - `/v1/embeddings` - 嵌入向量
 - `/v1/images/generations` - 图像生成
-- `/v1/audio/*` - 音频处理
+- `/v1/audio/transcriptions` - 语音转文字
+- `/v1/audio/translations` - 语音翻译
 - `/v1/files` - 文件管理
 - `/v1/fine-tuning/*` - 微调
 

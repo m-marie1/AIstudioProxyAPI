@@ -18,6 +18,7 @@ from .proxy import router as proxy_router
 from .queue import cancel_request, get_queue_status
 from .server import router as server_router
 from .static import read_index, serve_react_assets
+from .tts import audio_speech, list_tts_models, list_tts_voices
 
 __all__ = [
     "read_index",
@@ -39,4 +40,8 @@ __all__ = [
     "ports_router",
     "server_router",
     "helper_router",
+    # TTS endpoints
+    "audio_speech",
+    "list_tts_voices",
+    "list_tts_models",
 ]

@@ -16,12 +16,15 @@ from .request_processor import (
 
 # 路由处理器（改为从 routers 聚合导入）
 from .routers import (
+    audio_speech,
     cancel_request,
     chat_completions,
     get_api_info,
     get_queue_status,
     health_check,
     list_models,
+    list_tts_models,
+    list_tts_voices,
     read_index,
     websocket_log_endpoint,
 )
@@ -30,6 +33,9 @@ from .sse import (
     generate_sse_error_chunk,
     generate_sse_stop_chunk,
 )
+
+# TTS处理器
+from .tts_processor import process_tts_request
 
 # 工具函数
 from .utils import prepare_combined_prompt
@@ -56,6 +62,10 @@ __all__ = [
     "cancel_request",
     "get_queue_status",
     "websocket_log_endpoint",
+    # TTS路由
+    "audio_speech",
+    "list_tts_voices",
+    "list_tts_models",
     # 工具函数
     "generate_sse_chunk",
     "generate_sse_stop_chunk",
@@ -69,6 +79,8 @@ __all__ = [
     "calculate_usage_stats",
     # 请求处理器
     "_process_request_refactored",
+    # TTS处理器
+    "process_tts_request",
     # 队列工作器
     "queue_worker",
 ]
