@@ -92,6 +92,9 @@ def test_is_tts_model():
     assert is_tts_model("gpt-4") is False
     assert is_tts_model("") is False
     assert is_tts_model(None) is False  # type: ignore
+    # Test that substring matching doesn't work (exact match only)
+    assert is_tts_model("my-gemini-2.5-pro-preview-tts-test") is False
+    assert is_tts_model("gemini-2.5-pro-preview-tts-custom") is False
 
 
 def test_get_default_tts_model():

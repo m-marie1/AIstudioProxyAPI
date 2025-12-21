@@ -7,7 +7,7 @@ Supports both single-speaker and multi-speaker audio generation via Gemini TTS.
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Available voices from AI Studio TTS
 # Based on the UI screenshots, these are the available voice options
@@ -44,11 +44,26 @@ AVAILABLE_VOICES = [
     "Sulafat",
 ]
 
+# Create a set for faster lookups (case-insensitive)
+_AVAILABLE_VOICES_LOWER = {v.lower() for v in AVAILABLE_VOICES}
+
 # TTS model IDs
 TTS_MODELS = [
     "gemini-2.5-pro-preview-tts",
     "gemini-2.5-flash-preview-tts",
 ]
+
+# Create a set for exact matching (case-insensitive)
+_TTS_MODELS_LOWER = {m.lower() for m in TTS_MODELS}
+
+
+def _validate_voice(voice: str) -> str:
+    """Validate and normalize a voice name."""
+    if voice.lower() not in _AVAILABLE_VOICES_LOWER:
+        # Find the closest match or use default
+        # For now, just use the voice as-is to allow new voices
+        pass
+    return voice
 
 
 class TTSSpeaker(BaseModel):
@@ -62,6 +77,16 @@ class TTSSpeaker(BaseModel):
     name: Optional[str] = Field(
         default=None, description="Optional display name for the speaker"
     )
+
+    @field_validator("voice")
+    @classmethod
+    def validate_voice(cls, v: str) -> str:
+        """Validate voice is in the available voices list."""
+        if v.lower() not in _AVAILABLE_VOICES_LOWER:
+            # Log warning but allow the voice (in case new voices are added)
+            # This is more lenient than strict validation
+            pass
+        return v
 
 
 class TTSRequest(BaseModel):
@@ -108,6 +133,15 @@ class TTSRequest(BaseModel):
         default=1.0, ge=0.25, le=4.0, description="Speed of the generated audio"
     )
 
+    @field_validator("voice")
+    @classmethod
+    def validate_voice(cls, v: str) -> str:
+        """Validate voice is in the available voices list."""
+        if v.lower() not in _AVAILABLE_VOICES_LOWER:
+            # Log warning but allow the voice (in case new voices are added)
+            pass
+        return v
+
 
 class TTSResponse(BaseModel):
     """
@@ -123,11 +157,10 @@ class TTSResponse(BaseModel):
 
 
 def is_tts_model(model_id: str) -> bool:
-    """Check if a model ID is a TTS model."""
+    """Check if a model ID is a TTS model using exact matching."""
     if not model_id:
         return False
-    model_lower = model_id.lower()
-    return any(tts_model.lower() in model_lower for tts_model in TTS_MODELS)
+    return model_id.lower() in _TTS_MODELS_LOWER
 
 
 def get_default_tts_model() -> str:

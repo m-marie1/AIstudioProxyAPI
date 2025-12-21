@@ -10,6 +10,7 @@ import base64
 import logging
 from typing import Callable, List, Optional
 
+import aiohttp
 from playwright.async_api import Page as AsyncPage
 from playwright.async_api import expect as expect_async
 
@@ -506,8 +507,6 @@ class TTSController:
     async def _fetch_url_audio(self, url: str) -> Optional[bytes]:
         """Fetch audio data from a URL."""
         try:
-            import aiohttp
-
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as response:
                     if response.status == 200:
