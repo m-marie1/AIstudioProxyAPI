@@ -20,14 +20,21 @@ from models import TTSRequest, TTSSpeaker
 # TTS-specific selectors (based on AI Studio TTS UI)
 TTS_MODEL_SELECTOR = "gemini-2.5-pro-preview-tts"
 
-# Style instructions input
+# Style instructions input (single-speaker mode)
 TTS_STYLE_INSTRUCTIONS_SELECTOR = 'textarea[aria-label*="Style"], textarea[placeholder*="style" i], .style-instructions textarea'
 
-# Single-speaker mode selectors
+# Single-speaker mode selectors - Text input field
 TTS_TEXT_INPUT_SELECTOR = 'textarea[aria-label*="Text"], textarea[placeholder*="text" i], .text-input textarea'
 
-# Voice dropdown selector
-TTS_VOICE_DROPDOWN_SELECTOR = 'mat-select[aria-label*="Voice"], .voice-selector mat-select, button[aria-label*="Voice"]'
+# Voice dropdown selector - the mat-select element that opens voice list
+# The dropdown panel has id like 'mat-select-0-panel', trigger is mat-select element
+# In single-speaker: under "Voice" label on right panel
+# In multi-speaker: under "Speaker 1 settings" and "Speaker 2 settings"
+TTS_VOICE_DROPDOWN_SELECTOR = (
+    'mat-select, '
+    'div[role="combobox"], '
+    '[aria-haspopup="listbox"]'
+)
 
 # Run button selector
 TTS_RUN_BUTTON_SELECTOR = 'button[aria-label*="Run"], button:has-text("Run"), .run-button'
@@ -37,9 +44,24 @@ TTS_AUDIO_PLAYER_SELECTOR = "audio, .audio-player audio"
 TTS_DOWNLOAD_BUTTON_SELECTOR = 'button[aria-label*="Download"], button:has-text("Download"), a[download]'
 
 # Multi-speaker mode selectors
+# Raw structure textarea on the left panel - this is where we input formatted text
+TTS_RAW_STRUCTURE_SELECTOR = (
+    'textarea[aria-label*="Raw" i], '
+    'textarea[aria-label*="structure" i], '
+    '.raw-structure textarea, '
+    'ms-tts-raw-input textarea, '
+    'div:has(> span:has-text("Raw structure")) + * textarea, '
+    'div:has(> div:has-text("Raw structure")) textarea'
+)
+
+# Add dialog button (kept for fallback)
 TTS_ADD_DIALOG_BUTTON_SELECTOR = 'button:has-text("Add dialog"), button[aria-label*="Add dialog"]'
 TTS_SPEAKER_INPUT_SELECTOR = ".speaker-dialog textarea, .dialog-input textarea"
 TTS_SPEAKER_BADGE_SELECTOR = ".speaker-badge, .speaker-label"
+
+# Speaker settings sections on right panel (for voice selection)
+TTS_SPEAKER_1_SETTINGS_SELECTOR = 'div:has-text("Speaker 1 settings"), [aria-label*="Speaker 1"]'
+TTS_SPEAKER_2_SETTINGS_SELECTOR = 'div:has-text("Speaker 2 settings"), [aria-label*="Speaker 2"]'
 
 # Mode toggle selectors
 TTS_SINGLE_SPEAKER_MODE_SELECTOR = 'button:has-text("Single-speaker"), [aria-label*="Single-speaker"]'
@@ -82,7 +104,8 @@ class TTSController:
         try:
             # The TTS page URL pattern in AI Studio
             # Based on how AI Studio structures URLs
-            tts_url = f"https://aistudio.google.com/prompts/new_tts?model={model_id}"
+            tts_url = f"https://aistudio.google.com/generate-speech?model={model_id}"
+            #https://aistudio.google.com/prompts/new_tts?model=gemini-2.5-pro-preview-tts
 
             # Navigate to TTS page
             await self.page.goto(tts_url, wait_until="domcontentloaded", timeout=30000)
@@ -212,37 +235,57 @@ class TTSController:
             self.logger.error(f"[TTS] 填充文本内容失败: {e}")
             return False
 
-    async def select_voice(self, voice: str) -> bool:
+    async def select_voice(self, voice: str, voice_index: int = 0) -> bool:
         """
         Select a voice from the dropdown.
 
         Args:
             voice: Voice name (e.g., "Zephyr")
+            voice_index: Which voice dropdown to use (0 for single-speaker or Speaker 1, 1 for Speaker 2)
 
         Returns:
             True if successful
         """
         set_request_id(self.req_id)
-        self.logger.info(f"[TTS] 选择语音: {voice}")
+        self.logger.info(f"[TTS] 选择语音: {voice} (index: {voice_index})")
 
         try:
-            # Find and click the voice dropdown
-            voice_dropdown = self.page.locator(TTS_VOICE_DROPDOWN_SELECTOR).first
+            # Find voice dropdowns (mat-select elements)
+            voice_dropdowns = self.page.locator(TTS_VOICE_DROPDOWN_SELECTOR)
+            dropdown_count = await voice_dropdowns.count()
+            
+            self.logger.debug(f"[TTS] 找到 {dropdown_count} 个语音下拉框")
 
-            if await voice_dropdown.count() == 0:
+            if dropdown_count == 0:
                 self.logger.warning("[TTS] 语音下拉框未找到")
                 return False
+            
+            if voice_index >= dropdown_count:
+                self.logger.warning(f"[TTS] 语音下拉框索引 {voice_index} 超出范围 (共 {dropdown_count} 个)")
+                return False
 
+            voice_dropdown = voice_dropdowns.nth(voice_index)
+            
+            # Scroll the dropdown into view (important for Speaker 2 which may be off-screen)
+            await voice_dropdown.scroll_into_view_if_needed(timeout=5000)
+            await asyncio.sleep(0.3)
+            
             await voice_dropdown.click(timeout=5000)
             await asyncio.sleep(0.5)
 
-            # Find and click the voice option
+            # Find and click the voice option in the opened listbox
+            # The voice name is in a div with class "name" inside each mat-option
+            # e.g., <div class="name">Puck</div>
             voice_option = self.page.locator(
-                f'mat-option:has-text("{voice}"), [role="option"]:has-text("{voice}")'
+                f'mat-option:has(.name:text-is("{voice}")), '
+                f'mat-option .name:text-is("{voice}"), '
+                f'[role="option"]:has(.name:text-is("{voice}")), '
+                f'.cdk-overlay-container mat-option:has-text("{voice}")'
             ).first
 
             if await voice_option.count() > 0:
                 await voice_option.click(timeout=5000)
+                await asyncio.sleep(0.3)
                 self.logger.info(f"[TTS] 已选择语音: {voice}")
                 return True
             else:
@@ -260,59 +303,127 @@ class TTSController:
             return False
 
     async def fill_multi_speaker_dialogs(
-        self, speakers: List[TTSSpeaker]
+        self, speakers: List[TTSSpeaker], style_instructions: Optional[str] = None
     ) -> bool:
         """
         Fill in multiple speaker dialogs for multi-speaker mode.
+        
+        In multi-speaker mode, we replace the content in the "Raw structure" textarea
+        on the left panel. The format is:
+        
+        [style instructions]
+        Speaker 1: [text for speaker 1]
+        Speaker 2: [text for speaker 2]
+        Speaker 1: [next text for speaker 1]
+        ...
+        
+        Speaker turns alternate between Speaker 1 and Speaker 2.
+        The Script Builder on the right will automatically parse this format.
+        We then select the appropriate voices from the right panel.
 
         Args:
             speakers: List of speaker objects with text and voice
+            style_instructions: Optional style instructions
 
         Returns:
             True if successful
         """
         set_request_id(self.req_id)
-        self.logger.info(f"[TTS] 填充多说话人对话 ({len(speakers)} speakers)")
+        self.logger.info(f"[TTS] 填充多说话人对话 ({len(speakers)} turns)")
 
         try:
+            # Build the raw structure text
+            # Format: style instructions on first line(s), then Speaker N: text
+            # Speakers alternate: 1, 2, 1, 2, ...
+            raw_text_parts = []
+            
+            # Add style instructions if provided
+            if style_instructions:
+                raw_text_parts.append(style_instructions)
+            
+            # Track voices for Speaker 1 and Speaker 2
+            # First occurrence of each speaker determines their voice
+            speaker_voices = {1: None, 2: None}
+            
+            # Add speaker turns - alternate between Speaker 1 and Speaker 2
             for i, speaker in enumerate(speakers):
-                # Find speaker input fields
-                speaker_inputs = self.page.locator(TTS_SPEAKER_INPUT_SELECTOR)
-                current_count = await speaker_inputs.count()
-
-                # Add more dialog slots if needed
-                if i >= current_count:
-                    add_dialog_btn = self.page.locator(TTS_ADD_DIALOG_BUTTON_SELECTOR)
-                    if await add_dialog_btn.count() > 0:
-                        await add_dialog_btn.first.click(timeout=5000)
+                # Alternate: 0->1, 1->2, 2->1, 3->2, etc.
+                speaker_num = (i % 2) + 1
+                raw_text_parts.append(f"Speaker {speaker_num}: {speaker.text}")
+                
+                # Record voice for this speaker (first occurrence wins)
+                if speaker.voice and speaker_voices[speaker_num] is None:
+                    speaker_voices[speaker_num] = speaker.voice
+            
+            raw_text = "\n".join(raw_text_parts)
+            self.logger.debug(f"[TTS] Raw structure text: {raw_text[:200]}...")
+            self.logger.debug(f"[TTS] Speaker voices: {speaker_voices}")
+            
+            # Find the Raw structure textarea and fill it
+            # Try multiple selectors to find the textarea
+            raw_textarea = None
+            
+            # Try the defined selector first
+            raw_textarea_locator = self.page.locator(TTS_RAW_STRUCTURE_SELECTOR).first
+            if await raw_textarea_locator.count() > 0:
+                raw_textarea = raw_textarea_locator
+            else:
+                # Fallback: find textarea in the left panel (Raw structure section)
+                # The left panel has "Raw structure" header
+                self.logger.debug("[TTS] 尝试备用Raw structure选择器")
+                
+                # Try to find any textarea that might be the raw structure input
+                all_textareas = self.page.locator('textarea')
+                textarea_count = await all_textareas.count()
+                self.logger.debug(f"[TTS] 页面上共有 {textarea_count} 个textarea")
+                
+                # The raw structure textarea typically contains the default text
+                for i in range(textarea_count):
+                    ta = all_textareas.nth(i)
+                    try:
+                        value = await ta.input_value(timeout=1000)
+                        # Check if it contains the default multi-speaker text pattern
+                        if "Speaker 1:" in value or "Speaker 2:" in value:
+                            raw_textarea = ta
+                            self.logger.debug(f"[TTS] 找到Raw structure textarea (index {i})")
+                            break
+                    except Exception:
+                        continue
+            
+            if raw_textarea is None:
+                self.logger.error("[TTS] Raw structure textarea未找到")
+                return False
+            
+            # Clear and fill the textarea with our formatted content
+            await raw_textarea.click(timeout=5000)
+            await asyncio.sleep(0.2)
+            
+            # Select all and replace
+            await self.page.keyboard.press("Control+a")
+            await asyncio.sleep(0.1)
+            
+            await raw_textarea.fill(raw_text, timeout=5000)
+            await asyncio.sleep(0.5)
+            
+            self.logger.info("[TTS] Raw structure已填充")
+            
+            # Now select voices for Speaker 1 and Speaker 2 from the right panel
+            # Default voices are Zephyr (Speaker 1) and Puck (Speaker 2)
+            default_voices = {1: "Zephyr", 2: "Puck"}
+            
+            for speaker_num in [1, 2]:
+                voice = speaker_voices.get(speaker_num)
+                if voice:
+                    default_voice = default_voices[speaker_num]
+                    if voice.lower() != default_voice.lower():
+                        self.logger.info(f"[TTS] Speaker {speaker_num}: 更改语音从 {default_voice} 到 {voice}")
+                        # voice_index: 0 for Speaker 1, 1 for Speaker 2
+                        await self.select_voice(voice, voice_index=speaker_num - 1)
                         await asyncio.sleep(0.3)
                     else:
-                        self.logger.warning("[TTS] 无法添加更多对话")
-                        break
-
-                # Fill in the speaker's text
-                speaker_inputs = self.page.locator(TTS_SPEAKER_INPUT_SELECTOR)
-                if i < await speaker_inputs.count():
-                    await speaker_inputs.nth(i).fill(speaker.text, timeout=5000)
-
-                # Select voice for this speaker if specified
-                if speaker.voice:
-                    # Voice selection for multi-speaker may have indexed selectors
-                    voice_selectors = self.page.locator(TTS_VOICE_DROPDOWN_SELECTOR)
-                    if i < await voice_selectors.count():
-                        await voice_selectors.nth(i).click(timeout=5000)
-                        await asyncio.sleep(0.3)
-
-                        voice_option = self.page.locator(
-                            f'mat-option:has-text("{speaker.voice}"), [role="option"]:has-text("{speaker.voice}")'
-                        ).first
-
-                        if await voice_option.count() > 0:
-                            await voice_option.click(timeout=5000)
-                        else:
-                            await self.page.keyboard.press("Escape")
-
-            self.logger.info("[TTS] 多说话人对话已填充")
+                        self.logger.debug(f"[TTS] Speaker {speaker_num}: 使用默认语音 {default_voice}")
+            
+            self.logger.info("[TTS] 多说话人对话已填充完成")
             return True
 
         except Exception as e:
@@ -362,7 +473,7 @@ class TTSController:
     async def wait_for_audio_ready(
         self,
         check_client_disconnected: Callable[[str], bool],
-        timeout_ms: int = 120000,
+        timeout_ms: int = 600000,
     ) -> bool:
         """
         Wait for the audio to be generated and ready.
@@ -552,20 +663,25 @@ class TTSController:
 
             await self._check_disconnect(check_client_disconnected, "After Mode Set")
 
-            # 4. Fill in style instructions
-            if request.style_instructions:
-                await self.fill_style_instructions(request.style_instructions)
-
-            # 5. Fill in content
+            # 4 & 5. Fill in content (handling differs by mode)
             if is_multi_speaker and request.speakers:
-                # Multi-speaker mode
-                await self.fill_multi_speaker_dialogs(request.speakers)
+                # Multi-speaker mode: fill raw structure textarea with formatted text
+                # This includes both style instructions and speaker turns
+                await self.fill_multi_speaker_dialogs(
+                    request.speakers, 
+                    style_instructions=request.style_instructions
+                )
             else:
                 # Single-speaker mode
+                # Fill style instructions first
+                if request.style_instructions:
+                    await self.fill_style_instructions(request.style_instructions)
+                
+                # Fill text input
                 if request.input:
                     await self.fill_text_input(request.input)
 
-                # Select voice
+                # Select voice if different from default
                 if request.voice:
                     await self.select_voice(request.voice)
 
