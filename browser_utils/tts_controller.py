@@ -8,7 +8,7 @@ Manages the TTS-specific UI elements for both single-speaker and multi-speaker m
 import asyncio
 import base64
 import logging
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 from playwright.async_api import Page as AsyncPage
@@ -71,6 +71,16 @@ TTS_MULTI_SPEAKER_MODE_SELECTOR = 'button:has-text("Multi-speaker"), [aria-label
 TTS_MODEL_DROPDOWN_SELECTOR = ".model-selector, mat-select[aria-label*='Model']"
 
 
+class TTSGenerationError(Exception):
+    """Structured TTS generation error for upstream handling."""
+
+    def __init__(self, code: str, message: str, details: Optional[Dict[str, str]] = None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = details or {}
+
+
 class TTSController:
     """Controller for TTS page interactions in AI Studio."""
 
@@ -99,7 +109,7 @@ class TTSController:
             True if navigation was successful
         """
         set_request_id(self.req_id)
-        self.logger.info(f"[TTS] 导航到TTS页面 (Model: {model_id})")
+        self.logger.info(f"[TTS] Navigating to TTS page (Model: {model_id})")
 
         try:
             # The TTS page URL pattern in AI Studio
@@ -123,22 +133,22 @@ class TTSController:
                 has_text = await text_input.count() > 0
 
                 if has_style or has_text:
-                    self.logger.info("[TTS] TTS页面加载成功")
+                    self.logger.info("[TTS] TTS page loaded successfully")
                     return True
                 else:
-                    self.logger.warning("[TTS] TTS页面元素未找到，尝试备用检测")
+                    self.logger.warning("[TTS] TTS page elements not found, trying fallback checks")
                     # Check for run button as fallback
                     run_button = self.page.locator(TTS_RUN_BUTTON_SELECTOR)
                     if await run_button.count() > 0:
                         return True
 
             except Exception as e:
-                self.logger.warning(f"[TTS] 页面验证失败: {e}")
+                self.logger.warning(f"[TTS] Page validation failed: {e}")
 
             return False
 
         except Exception as e:
-            self.logger.error(f"[TTS] 导航到TTS页面失败: {e}")
+            self.logger.error(f"[TTS] Failed to navigate to TTS page: {e}")
             return False
 
     async def set_tts_mode(self, is_multi_speaker: bool) -> bool:
@@ -153,7 +163,7 @@ class TTSController:
         """
         set_request_id(self.req_id)
         mode_name = "Multi-speaker" if is_multi_speaker else "Single-speaker"
-        self.logger.info(f"[TTS] 设置TTS模式: {mode_name}")
+        self.logger.info(f"[TTS] Setting TTS mode: {mode_name}")
 
         try:
             selector = (
@@ -166,14 +176,14 @@ class TTSController:
             if await mode_button.count() > 0:
                 await mode_button.first.click(timeout=5000)
                 await asyncio.sleep(0.5)
-                self.logger.info(f"[TTS] {mode_name}模式已启用")
+                self.logger.info(f"[TTS] {mode_name} mode enabled")
                 return True
             else:
-                self.logger.warning(f"[TTS] {mode_name}模式按钮未找到")
+                self.logger.warning(f"[TTS] {mode_name} mode button not found")
                 return False
 
         except Exception as e:
-            self.logger.error(f"[TTS] 设置模式失败: {e}")
+            self.logger.error(f"[TTS] Failed to set mode: {e}")
             return False
 
     async def fill_style_instructions(self, style: Optional[str]) -> bool:
@@ -190,21 +200,21 @@ class TTSController:
             return True
 
         set_request_id(self.req_id)
-        self.logger.debug(f"[TTS] 填充风格指令 ({len(style)} chars)")
+        self.logger.debug(f"[TTS] Filling style instructions ({len(style)} chars)")
 
         try:
             style_input = self.page.locator(TTS_STYLE_INSTRUCTIONS_SELECTOR).first
 
             if await style_input.count() > 0:
                 await style_input.fill(style, timeout=5000)
-                self.logger.debug("[TTS] 风格指令已填充")
+                self.logger.debug("[TTS] Style instructions filled")
                 return True
             else:
-                self.logger.warning("[TTS] 风格指令输入框未找到")
+                self.logger.warning("[TTS] Style instructions input not found")
                 return False
 
         except Exception as e:
-            self.logger.error(f"[TTS] 填充风格指令失败: {e}")
+            self.logger.error(f"[TTS] Failed to fill style instructions: {e}")
             return False
 
     async def fill_text_input(self, text: str) -> bool:
@@ -218,21 +228,21 @@ class TTSController:
             True if successful
         """
         set_request_id(self.req_id)
-        self.logger.debug(f"[TTS] 填充文本内容 ({len(text)} chars)")
+        self.logger.debug(f"[TTS] Filling text input ({len(text)} chars)")
 
         try:
             text_input = self.page.locator(TTS_TEXT_INPUT_SELECTOR).first
 
             if await text_input.count() > 0:
                 await text_input.fill(text, timeout=5000)
-                self.logger.debug("[TTS] 文本内容已填充")
+                self.logger.debug("[TTS] Text input filled")
                 return True
             else:
-                self.logger.warning("[TTS] 文本输入框未找到")
+                self.logger.warning("[TTS] Text input not found")
                 return False
 
         except Exception as e:
-            self.logger.error(f"[TTS] 填充文本内容失败: {e}")
+            self.logger.error(f"[TTS] Failed to fill text input: {e}")
             return False
 
     async def select_voice(self, voice: str, voice_index: int = 0) -> bool:
@@ -247,21 +257,21 @@ class TTSController:
             True if successful
         """
         set_request_id(self.req_id)
-        self.logger.info(f"[TTS] 选择语音: {voice} (index: {voice_index})")
+        self.logger.info(f"[TTS] Selecting voice: {voice} (index: {voice_index})")
 
         try:
             # Find voice dropdowns (mat-select elements)
             voice_dropdowns = self.page.locator(TTS_VOICE_DROPDOWN_SELECTOR)
             dropdown_count = await voice_dropdowns.count()
             
-            self.logger.debug(f"[TTS] 找到 {dropdown_count} 个语音下拉框")
+            self.logger.debug(f"[TTS] Found {dropdown_count} voice dropdown(s)")
 
             if dropdown_count == 0:
-                self.logger.warning("[TTS] 语音下拉框未找到")
+                self.logger.warning("[TTS] Voice dropdown not found")
                 return False
             
             if voice_index >= dropdown_count:
-                self.logger.warning(f"[TTS] 语音下拉框索引 {voice_index} 超出范围 (共 {dropdown_count} 个)")
+                self.logger.warning(f"[TTS] Voice dropdown index {voice_index} out of range (total: {dropdown_count})")
                 return False
 
             voice_dropdown = voice_dropdowns.nth(voice_index)
@@ -286,16 +296,16 @@ class TTSController:
             if await voice_option.count() > 0:
                 await voice_option.click(timeout=5000)
                 await asyncio.sleep(0.3)
-                self.logger.info(f"[TTS] 已选择语音: {voice}")
+                self.logger.info(f"[TTS] Selected voice: {voice}")
                 return True
             else:
-                self.logger.warning(f"[TTS] 语音选项 '{voice}' 未找到")
+                self.logger.warning(f"[TTS] Voice option '{voice}' not found")
                 # Press Escape to close dropdown
                 await self.page.keyboard.press("Escape")
                 return False
 
         except Exception as e:
-            self.logger.error(f"[TTS] 选择语音失败: {e}")
+            self.logger.error(f"[TTS] Failed to select voice: {e}")
             try:
                 await self.page.keyboard.press("Escape")
             except Exception:
@@ -329,13 +339,13 @@ class TTSController:
             True if successful
         """
         set_request_id(self.req_id)
-        self.logger.info(f"[TTS] 填充多说话人对话 ({len(speakers)} turns)")
+        self.logger.info(f"[TTS] Filling multi-speaker dialog ({len(speakers)} turns)")
 
         try:
             # Build the raw structure text
             # Format: style instructions on first line(s), then Speaker N: text
             # Speakers alternate: 1, 2, 1, 2, ...
-            raw_text_parts = []
+            raw_text_parts: List[str] = []
             
             # Add style instructions if provided
             if style_instructions:
@@ -343,7 +353,7 @@ class TTSController:
             
             # Track voices for Speaker 1 and Speaker 2
             # First occurrence of each speaker determines their voice
-            speaker_voices = {1: None, 2: None}
+            speaker_voices: Dict[int, Optional[str]] = {1: None, 2: None}
             
             # Add speaker turns - alternate between Speaker 1 and Speaker 2
             for i, speaker in enumerate(speakers):
@@ -370,12 +380,12 @@ class TTSController:
             else:
                 # Fallback: find textarea in the left panel (Raw structure section)
                 # The left panel has "Raw structure" header
-                self.logger.debug("[TTS] 尝试备用Raw structure选择器")
+                self.logger.debug("[TTS] Trying fallback Raw structure selector")
                 
                 # Try to find any textarea that might be the raw structure input
                 all_textareas = self.page.locator('textarea')
                 textarea_count = await all_textareas.count()
-                self.logger.debug(f"[TTS] 页面上共有 {textarea_count} 个textarea")
+                self.logger.debug(f"[TTS] Found {textarea_count} textarea element(s) on page")
                 
                 # The raw structure textarea typically contains the default text
                 for i in range(textarea_count):
@@ -385,13 +395,13 @@ class TTSController:
                         # Check if it contains the default multi-speaker text pattern
                         if "Speaker 1:" in value or "Speaker 2:" in value:
                             raw_textarea = ta
-                            self.logger.debug(f"[TTS] 找到Raw structure textarea (index {i})")
+                            self.logger.debug(f"[TTS] Found Raw structure textarea (index {i})")
                             break
                     except Exception:
                         continue
             
             if raw_textarea is None:
-                self.logger.error("[TTS] Raw structure textarea未找到")
+                self.logger.error("[TTS] Raw structure textarea not found")
                 return False
             
             # Clear and fill the textarea with our formatted content
@@ -405,7 +415,7 @@ class TTSController:
             await raw_textarea.fill(raw_text, timeout=5000)
             await asyncio.sleep(0.5)
             
-            self.logger.info("[TTS] Raw structure已填充")
+            self.logger.info("[TTS] Raw structure filled")
             
             # Now select voices for Speaker 1 and Speaker 2 from the right panel
             # Default voices are Zephyr (Speaker 1) and Puck (Speaker 2)
@@ -416,18 +426,18 @@ class TTSController:
                 if voice:
                     default_voice = default_voices[speaker_num]
                     if voice.lower() != default_voice.lower():
-                        self.logger.info(f"[TTS] Speaker {speaker_num}: 更改语音从 {default_voice} 到 {voice}")
+                        self.logger.info(f"[TTS] Speaker {speaker_num}: changing voice from {default_voice} to {voice}")
                         # voice_index: 0 for Speaker 1, 1 for Speaker 2
                         await self.select_voice(voice, voice_index=speaker_num - 1)
                         await asyncio.sleep(0.3)
                     else:
-                        self.logger.debug(f"[TTS] Speaker {speaker_num}: 使用默认语音 {default_voice}")
+                        self.logger.debug(f"[TTS] Speaker {speaker_num}: using default voice {default_voice}")
             
-            self.logger.info("[TTS] 多说话人对话已填充完成")
+            self.logger.info("[TTS] Multi-speaker dialog filled")
             return True
 
         except Exception as e:
-            self.logger.error(f"[TTS] 填充多说话人对话失败: {e}")
+            self.logger.error(f"[TTS] Failed to fill multi-speaker dialog: {e}")
             return False
 
     async def run_tts_generation(
@@ -443,7 +453,7 @@ class TTSController:
             True if generation started successfully
         """
         set_request_id(self.req_id)
-        self.logger.info("[TTS] 开始TTS生成")
+        self.logger.info("[TTS] Starting TTS generation")
 
         try:
             await self._check_disconnect(check_client_disconnected, "Before TTS Run")
@@ -451,23 +461,23 @@ class TTSController:
             run_button = self.page.locator(TTS_RUN_BUTTON_SELECTOR).first
 
             if await run_button.count() == 0:
-                self.logger.error("[TTS] Run按钮未找到")
+                self.logger.error("[TTS] Run button not found")
                 return False
 
             # Wait for button to be enabled
             try:
                 await expect_async(run_button).to_be_enabled(timeout=10000)
             except Exception:
-                self.logger.warning("[TTS] Run按钮可能未启用，仍尝试点击")
+                self.logger.warning("[TTS] Run button may be disabled, attempting click anyway")
 
             await run_button.click(timeout=5000)
-            self.logger.info("[TTS] TTS生成已开始")
+            self.logger.info("[TTS] TTS generation started")
 
             await self._check_disconnect(check_client_disconnected, "After TTS Run")
             return True
 
         except Exception as e:
-            self.logger.error(f"[TTS] 启动TTS生成失败: {e}")
+            self.logger.error(f"[TTS] Failed to start TTS generation: {e}")
             return False
 
     async def wait_for_audio_ready(
@@ -486,7 +496,7 @@ class TTSController:
             True if audio is ready
         """
         set_request_id(self.req_id)
-        self.logger.info("[TTS] 等待音频生成完成")
+        self.logger.info("[TTS] Waiting for audio generation")
 
         start_time = asyncio.get_event_loop().time()
         timeout_seconds = timeout_ms / 1000
@@ -497,6 +507,13 @@ class TTSController:
                     check_client_disconnected, "Waiting for TTS Audio"
                 )
 
+                error_code, error_message = await self._detect_generation_error()
+                if error_code:
+                    raise TTSGenerationError(
+                        code=error_code,
+                        message=error_message or "TTS generation failed",
+                    )
+
                 # Check for audio player or download button
                 audio_player = self.page.locator(TTS_AUDIO_PLAYER_SELECTOR)
                 download_button = self.page.locator(TTS_DOWNLOAD_BUTTON_SELECTOR)
@@ -505,25 +522,90 @@ class TTSController:
                     # Check if audio has a source
                     audio_src = await audio_player.first.get_attribute("src")
                     if audio_src:
-                        self.logger.info("[TTS] 音频播放器已就绪")
+                        self.logger.info("[TTS] Audio player is ready")
                         return True
 
                 if await download_button.count() > 0:
                     if await download_button.first.is_visible(timeout=1000):
-                        self.logger.info("[TTS] 下载按钮已就绪")
+                        self.logger.info("[TTS] Download button is ready")
                         return True
 
                 # Check for timeout
                 elapsed = asyncio.get_event_loop().time() - start_time
                 if elapsed > timeout_seconds:
-                    self.logger.error("[TTS] 等待音频超时")
-                    return False
+                    self.logger.error("[TTS] Timed out waiting for audio")
+                    raise TTSGenerationError(
+                        code="tts_generation_timeout",
+                        message="Audio generation timed out",
+                    )
 
                 await asyncio.sleep(1)
 
         except Exception as e:
-            self.logger.error(f"[TTS] 等待音频失败: {e}")
+            self.logger.error(f"[TTS] Waiting for audio failed: {e}")
+            if isinstance(e, TTSGenerationError):
+                raise
             return False
+
+    async def _detect_generation_error(self) -> Tuple[Optional[str], Optional[str]]:
+        """Detect quota/auth/upstream failure hints from the page text."""
+        try:
+            page_text = await self.page.evaluate(
+                """
+                () => {
+                    const root = document.body;
+                    if (!root) return '';
+                    const text = root.innerText || '';
+                    return text.slice(0, 25000);
+                }
+                """
+            )
+            if not page_text:
+                return None, None
+
+            lower_text = page_text.lower()
+
+            quota_hints = [
+                "daily limit",
+                "rate limit",
+                "resource exhausted",
+                "quota",
+                "too many requests",
+                "429",
+            ]
+            if any(hint in lower_text for hint in quota_hints):
+                return (
+                    "tts_quota_exhausted",
+                    "TTS quota/rate limit exhausted for current model or account",
+                )
+
+            auth_hints = [
+                "sign in",
+                "log in",
+                "login",
+                "session expired",
+                "unauthorized",
+                "permission denied",
+            ]
+            if any(hint in lower_text for hint in auth_hints):
+                return (
+                    "tts_auth_required",
+                    "Authentication required or session expired while generating TTS",
+                )
+
+            generic_fail_hints = [
+                "something went wrong",
+                "try again",
+                "failed to generate",
+                "generation failed",
+            ]
+            if any(hint in lower_text for hint in generic_fail_hints):
+                return ("tts_generation_failed", "TTS generation failed in AI Studio")
+
+            return None, None
+        except Exception as detect_err:
+            self.logger.debug(f"[TTS] Error detection skipped due to: {detect_err}")
+            return None, None
 
     async def get_audio_data(self) -> Optional[bytes]:
         """
@@ -533,7 +615,7 @@ class TTSController:
             Audio data as bytes, or None if failed
         """
         set_request_id(self.req_id)
-        self.logger.info("[TTS] 获取音频数据")
+        self.logger.info("[TTS] Retrieving audio data")
 
         try:
             # Try to get audio from the audio player element
@@ -573,11 +655,11 @@ class TTSController:
                     if audio_data:
                         return audio_data
 
-            self.logger.error("[TTS] 无法获取音频数据")
+            self.logger.error("[TTS] Unable to retrieve audio data")
             return None
 
         except Exception as e:
-            self.logger.error(f"[TTS] 获取音频数据失败: {e}")
+            self.logger.error(f"[TTS] Failed to retrieve audio data: {e}")
             return None
 
     async def _fetch_blob_audio(self, blob_url: str) -> Optional[bytes]:
@@ -612,7 +694,7 @@ class TTSController:
             return None
 
         except Exception as e:
-            self.logger.error(f"[TTS] Blob音频获取失败: {e}")
+            self.logger.error(f"[TTS] Failed to fetch blob audio: {e}")
             return None
 
     async def _fetch_url_audio(self, url: str) -> Optional[bytes]:
@@ -625,7 +707,7 @@ class TTSController:
             return None
 
         except Exception as e:
-            self.logger.error(f"[TTS] URL音频获取失败: {e}")
+            self.logger.error(f"[TTS] Failed to fetch URL audio: {e}")
             return None
 
     async def process_tts_request(
@@ -644,12 +726,15 @@ class TTSController:
             Audio data as bytes, or None if failed
         """
         set_request_id(self.req_id)
-        self.logger.info("[TTS] 处理TTS请求")
+        self.logger.info("[TTS] Processing TTS request")
 
         try:
             # 1. Navigate to TTS page
             if not await self.navigate_to_tts_page(request.model):
-                raise Exception("Failed to navigate to TTS page")
+                raise TTSGenerationError(
+                    code="tts_navigation_failed",
+                    message="Failed to navigate to TTS page",
+                )
 
             await self._check_disconnect(
                 check_client_disconnected, "After TTS Page Navigation"
@@ -691,21 +776,30 @@ class TTSController:
 
             # 6. Run TTS generation
             if not await self.run_tts_generation(check_client_disconnected):
-                raise Exception("Failed to start TTS generation")
+                raise TTSGenerationError(
+                    code="tts_run_failed",
+                    message="Failed to start TTS generation",
+                )
 
             # 7. Wait for audio to be ready
             if not await self.wait_for_audio_ready(check_client_disconnected):
-                raise Exception("Audio generation timed out")
+                raise TTSGenerationError(
+                    code="tts_generation_timeout",
+                    message="Audio generation timed out",
+                )
 
             # 8. Get audio data
             audio_data = await self.get_audio_data()
 
             if audio_data:
-                self.logger.info(f"[TTS] 音频生成成功 ({len(audio_data)} bytes)")
+                self.logger.info(f"[TTS] Audio generated successfully ({len(audio_data)} bytes)")
                 return audio_data
             else:
-                raise Exception("Failed to retrieve audio data")
+                raise TTSGenerationError(
+                    code="tts_audio_retrieval_failed",
+                    message="Failed to retrieve audio data",
+                )
 
         except Exception as e:
-            self.logger.error(f"[TTS] TTS请求处理失败: {e}")
+            self.logger.error(f"[TTS] TTS request processing failed: {e}")
             raise

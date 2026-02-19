@@ -88,6 +88,19 @@ python launch_camoufox.py --debug --server-port 2048 --stream-port 0 --helper ''
 2. 将这个 `.json` 文件 **移动或复制** 到 `auth_profiles/active/` 目录下。
 3. **重要:** 确保 `auth_profiles/active/` 目录下 **有且仅有一个 `.json` 文件**。无头模式启动时会自动加载此目录下的第一个 `.json` 文件。
 
+## 多账号配置（用于自动配额切换）
+
+如果你希望在 TTS 日配额耗尽时自动切换账号：
+
+1. 对每个 Google 账号重复执行一次 `python launch_camoufox.py --debug` 登录并保存，确保每个账号都有独立 `.json` 文件。
+2. 把这些文件都放在 `auth_profiles/saved/`（可保留多个）。
+3. 启动前通过 `/api/auth/activate` 或手动方式选择一个初始账号到 `auth_profiles/active/`。
+
+运行时行为：
+
+- 当前账号下 `pro/flash` 两个 TTS 模型都触发日限额后，服务会自动切换到下一个已保存账号继续重试。
+- 如果所有已保存账号都耗尽，会返回结构化错误码（如 `tts_all_accounts_quota_exhausted`），便于客户端立即识别。
+
 ## 认证文件过期处理
 
 **认证文件会过期!** Google 的登录状态不是永久有效的。当无头模式启动失败并报告认证错误或重定向到登录页时，意味着 `active` 目录下的认证文件已失效。你需要：

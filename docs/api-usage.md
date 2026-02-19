@@ -141,6 +141,13 @@ curl -X POST http://127.0.0.1:2048/v1/chat/completions \
 
 与 OpenAI TTS API 兼容，支持单人和多人语音合成。
 
+#### 自动回退行为（新增）
+
+- 服务器会先使用请求里的 `model`。
+- 当检测到模型日配额/限流时，会自动尝试另一个 TTS 模型（`pro` ↔ `flash`）。
+- 当两个模型都耗尽时，会自动切换到下一个已保存认证账号（`auth_profiles/saved/*.json`）。
+- 若所有账号都耗尽，会返回明确的结构化错误码，便于客户端立即判断并停止盲重试。
+
 #### 支持的参数
 
 | 参数 | 类型 | 说明 |
@@ -166,8 +173,8 @@ Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, 等多种语音选择。
 
 ```bash
 # 单人语音合成
-curl -X POST http://127.0.0.1:2048/v1/audio/speech \
-  -H "Content-Type: application/json" \
+curl -X POST http://127.0.0.1:2048/v1/audio/speech `
+  -H "Content-Type: application/json" `
   -d '{
     "model": "gemini-2.5-pro-preview-tts",
     "input": "Hello, this is a test of text to speech.",
@@ -187,6 +194,30 @@ curl -X POST http://127.0.0.1:2048/v1/audio/speech \
     "style_instructions": "Read aloud in a warm, welcoming tone"
   }' --output dialog.mp3
 ```
+
+#### 错误响应格式（新增）
+
+TTS 失败时统一返回：
+
+```json
+{
+  "error": {
+    "message": "...",
+    "type": "rate_limit_error | upstream_error | timeout_error | invalid_request_error | service_unavailable_error",
+    "param": null,
+    "code": "tts_all_accounts_quota_exhausted",
+    "request_id": "tts-xxxxxxx",
+    "details": {}
+  }
+}
+```
+
+常见 `code`：
+
+- `tts_quota_exhausted` / `tts_all_accounts_quota_exhausted`
+- `tts_auth_profiles_exhausted` / `tts_auth_switch_failed`
+- `tts_generation_timeout` / `tts_no_audio_data`
+- `tts_navigation_failed` / `tts_run_failed` / `tts_audio_retrieval_failed`
 
 ### 语音列表
 

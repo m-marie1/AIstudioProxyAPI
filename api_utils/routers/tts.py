@@ -61,14 +61,35 @@ async def audio_speech(
     set_source("TTS-API")
 
     logger.info(
-        f"收到 /v1/audio/speech 请求 (Model={request.model}, Voice={request.voice})"
+        f"Received /v1/audio/speech request (Model={request.model}, Voice={request.voice})"
     )
+
+    def _router_tts_error(
+        status_code: int,
+        code: str,
+        message: str,
+        error_type: str = "server_error",
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "error": {
+                    "message": message,
+                    "type": error_type,
+                    "param": None,
+                    "code": code,
+                    "request_id": req_id,
+                }
+            },
+        )
 
     # Validate request
     if not request.input and not request.speakers:
-        raise HTTPException(
-            status_code=400,
-            detail="Either 'input' (for single-speaker) or 'speakers' (for multi-speaker) must be provided.",
+        return _router_tts_error(
+            400,
+            "tts_invalid_request",
+            "Either 'input' (for single-speaker) or 'speakers' (for multi-speaker) must be provided.",
+            "invalid_request_error",
         )
 
     launch_mode = get_environment_variable("LAUNCH_MODE", "unknown")
@@ -111,19 +132,42 @@ async def audio_speech(
         timeout_seconds = 300  # 5 minutes for TTS
         return await asyncio.wait_for(result_future, timeout=timeout_seconds)
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail=f"[{req_id}] TTS请求处理超时。")
+        return _router_tts_error(
+            504,
+            "tts_processing_timeout",
+            "TTS request processing timed out",
+            "timeout_error",
+        )
     except asyncio.CancelledError:
-        logger.info(f"TTS请求被客户端取消: {req_id}")
+        logger.info(f"TTS request cancelled by client: {req_id}")
         raise
     except HTTPException as http_exc:
+        detail = http_exc.detail
         if http_exc.status_code == 499:
-            logger.info(f"客户端断开连接: {http_exc.detail}")
+            logger.info(f"Client disconnected: {detail}")
+        elif isinstance(detail, dict) and "error" in detail:
+            return JSONResponse(
+                status_code=http_exc.status_code,
+                content=detail,
+                headers=http_exc.headers,
+            )
         else:
-            logger.warning(f"HTTP异常: {http_exc.detail}")
-        raise http_exc
+            logger.warning(f"HTTP exception: {detail}")
+            return _router_tts_error(
+                http_exc.status_code,
+                "tts_http_error",
+                str(detail),
+                "upstream_error",
+            )
+        raise
     except Exception as e:
-        logger.exception("等待TTS响应时出错")
-        raise HTTPException(status_code=500, detail=f"[{req_id}] 服务器内部错误: {e}")
+        logger.exception("Error while waiting for TTS response")
+        return _router_tts_error(
+            500,
+            "tts_internal_error",
+            f"Internal TTS server error: {e}",
+            "server_error",
+        )
 
 
 async def list_tts_voices(

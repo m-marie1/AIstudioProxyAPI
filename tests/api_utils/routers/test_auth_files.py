@@ -6,8 +6,9 @@ Covers: GET /api/auth/files, GET /api/auth/active,
 """
 
 import json
+import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -164,10 +165,12 @@ class TestActivateAuth:
     ) -> None:
         """Test activating an auth file."""
         active_dir, saved_dir = mock_auth_dirs
+        mock_auth_manager = MagicMock()
 
         with (
             patch("api_utils.routers.auth_files.ACTIVE_AUTH_DIR", str(active_dir)),
             patch("api_utils.routers.auth_files.SAVED_AUTH_DIR", str(saved_dir)),
+            patch("api_utils.routers.auth_files.auth_manager", mock_auth_manager),
         ):
             response = client.post(
                 "/api/auth/activate",
@@ -180,6 +183,12 @@ class TestActivateAuth:
 
             # Verify file was copied
             assert (active_dir / "user1.json").exists()
+            assert os.environ.get("ACTIVE_AUTH_JSON_PATH") == str(
+                active_dir / "user1.json"
+            )
+            assert mock_auth_manager.current_profile == str(active_dir / "user1.json")
+            mock_auth_manager.failed_profiles.clear.assert_called_once()
+            os.environ.pop("ACTIVE_AUTH_JSON_PATH", None)
 
     def test_activate_auth_file_not_found(
         self, client: TestClient, mock_auth_dirs: tuple[Path, Path]
@@ -208,11 +217,14 @@ class TestDeactivateAuth:
         active_dir.mkdir()
         saved_dir.mkdir()
         (active_dir / "current.json").write_text("{}")
+        mock_auth_manager = MagicMock()
 
         with (
             patch("api_utils.routers.auth_files.ACTIVE_AUTH_DIR", str(active_dir)),
             patch("api_utils.routers.auth_files.SAVED_AUTH_DIR", str(saved_dir)),
+            patch("api_utils.routers.auth_files.auth_manager", mock_auth_manager),
         ):
+            os.environ["ACTIVE_AUTH_JSON_PATH"] = str(active_dir / "current.json")
             response = client.delete("/api/auth/deactivate")
             assert response.status_code == 200
             data = response.json()
@@ -220,6 +232,10 @@ class TestDeactivateAuth:
 
             # Verify file was removed
             assert not (active_dir / "current.json").exists()
+            assert "ACTIVE_AUTH_JSON_PATH" not in os.environ
+            assert mock_auth_manager.current_profile is None
+            mock_auth_manager.failed_profiles.clear.assert_called_once()
+            os.environ.pop("ACTIVE_AUTH_JSON_PATH", None)
 
     def test_deactivate_auth_none_active(
         self, client: TestClient, tmp_path: Path
