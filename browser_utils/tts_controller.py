@@ -7,8 +7,10 @@ Manages the TTS-specific UI elements for both single-speaker and multi-speaker m
 
 import asyncio
 import base64
+import json
 import logging
-from typing import Callable, Dict, List, Optional, Tuple
+import queue
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 import aiohttp
 from playwright.async_api import Page as AsyncPage
@@ -507,6 +509,13 @@ class TTSController:
                     check_client_disconnected, "Waiting for TTS Audio"
                 )
 
+                stream_error_code, stream_error_message = self._poll_stream_proxy_error()
+                if stream_error_code:
+                    raise TTSGenerationError(
+                        code=stream_error_code,
+                        message=stream_error_message or "Upstream proxy error detected",
+                    )
+
                 error_code, error_message = await self._detect_generation_error()
                 if error_code:
                     raise TTSGenerationError(
@@ -547,8 +556,60 @@ class TTSController:
                 raise
             return False
 
+    def _poll_stream_proxy_error(self) -> Tuple[Optional[str], Optional[str]]:
+        """Poll stream proxy queue for fail-fast upstream errors during TTS."""
+        try:
+            from server import STREAM_QUEUE
+
+            if STREAM_QUEUE is None:
+                return None, None
+
+            while True:
+                try:
+                    item = STREAM_QUEUE.get_nowait()
+                except (queue.Empty, asyncio.QueueEmpty):
+                    return None, None
+
+                if item is None:
+                    continue
+
+                payload: Optional[Dict[str, Any]] = None
+                if isinstance(item, str):
+                    try:
+                        parsed = json.loads(item)
+                        if isinstance(parsed, dict):
+                            payload = cast(Dict[str, Any], parsed)
+                    except Exception:
+                        continue
+                elif isinstance(item, dict):
+                    payload = cast(Dict[str, Any], item)
+
+                if not payload or payload.get("error") is not True:
+                    continue
+
+                status_raw = payload.get("status", 0)
+                if isinstance(status_raw, int):
+                    status = status_raw
+                elif isinstance(status_raw, str) and status_raw.isdigit():
+                    status = int(status_raw)
+                else:
+                    status = 0
+                message = str(payload.get("message", "Unknown upstream error"))
+
+                if status == 429:
+                    return "tts_too_many_requests", message
+                if status == 400:
+                    return "tts_upstream_bad_request", message
+                if status >= 400:
+                    return "tts_upstream_error", message
+
+            return None, None
+        except Exception as poll_err:
+            self.logger.debug(f"[TTS] Stream proxy polling skipped due to: {poll_err}")
+            return None, None
+
     async def _detect_generation_error(self) -> Tuple[Optional[str], Optional[str]]:
-        """Detect quota/auth/upstream failure hints from the page text."""
+        """Detect explicit Too Many Requests/429 hints from the page text."""
         try:
             page_text = await self.page.evaluate(
                 """
@@ -565,42 +626,15 @@ class TTSController:
 
             lower_text = page_text.lower()
 
-            quota_hints = [
-                "daily limit",
-                "rate limit",
-                "resource exhausted",
-                "quota",
-                "too many requests",
-                "429",
-            ]
-            if any(hint in lower_text for hint in quota_hints):
-                return (
-                    "tts_quota_exhausted",
-                    "TTS quota/rate limit exhausted for current model or account",
-                )
+            # Keep this strict to avoid false positives from generic page text.
+            has_explicit_too_many_requests = "too many requests" in lower_text
+            has_429_request_phrase = "429" in lower_text and "request" in lower_text
 
-            auth_hints = [
-                "sign in",
-                "log in",
-                "login",
-                "session expired",
-                "unauthorized",
-                "permission denied",
-            ]
-            if any(hint in lower_text for hint in auth_hints):
+            if has_explicit_too_many_requests or has_429_request_phrase:
                 return (
-                    "tts_auth_required",
-                    "Authentication required or session expired while generating TTS",
+                    "tts_too_many_requests",
+                    "Upstream returned Too Many Requests (429)",
                 )
-
-            generic_fail_hints = [
-                "something went wrong",
-                "try again",
-                "failed to generate",
-                "generation failed",
-            ]
-            if any(hint in lower_text for hint in generic_fail_hints):
-                return ("tts_generation_failed", "TTS generation failed in AI Studio")
 
             return None, None
         except Exception as detect_err:

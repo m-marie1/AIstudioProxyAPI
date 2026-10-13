@@ -82,6 +82,14 @@ def _build_tts_model_fallback_order(requested_model: str) -> List[str]:
 async def _switch_auth_profile_for_tts(req_id: str, logger: logging.Logger) -> str:
     """Switch auth profile by fully reconnecting browser/page with next saved profile."""
     from api_utils.auth_manager import auth_manager
+
+    auth_manager.mark_profile_failed()
+    next_profile = await auth_manager.get_next_profile()
+    return await _activate_auth_profile_for_tts(next_profile, logger)
+
+
+async def _activate_auth_profile_for_tts(profile_path: str, logger: logging.Logger) -> str:
+    """Activate specified auth profile by reconnecting browser/page state."""
     from api_utils.server_state import state
     from browser_utils.initialization.core import (
         close_page_logic,
@@ -93,12 +101,10 @@ async def _switch_auth_profile_for_tts(req_id: str, logger: logging.Logger) -> s
     )
     from config import get_environment_variable
 
-    auth_manager.mark_profile_failed()
-    next_profile = await auth_manager.get_next_profile()
-    os.environ["ACTIVE_AUTH_JSON_PATH"] = next_profile
+    os.environ["ACTIVE_AUTH_JSON_PATH"] = profile_path
 
     logger.warning(
-        f"[TTS] Current account TTS quota exhausted, switching auth profile: {os.path.basename(next_profile)}"
+        f"[TTS] Activating auth profile: {os.path.basename(profile_path)}"
     )
 
     await close_page_logic()
@@ -121,7 +127,7 @@ async def _switch_auth_profile_for_tts(req_id: str, logger: logging.Logger) -> s
 
     state.page_instance, state.is_page_ready = await initialize_page_logic(
         state.browser_instance,
-        storage_state_path=next_profile,
+        storage_state_path=profile_path,
     )
 
     if not state.page_instance or not state.is_page_ready:
@@ -129,7 +135,7 @@ async def _switch_auth_profile_for_tts(req_id: str, logger: logging.Logger) -> s
 
     await _handle_initial_model_state_and_storage(state.page_instance)
     await enable_temporary_chat_mode(state.page_instance)
-    return next_profile
+    return profile_path
 
 
 class TTSClientDisconnectChecker:
@@ -210,9 +216,29 @@ async def process_tts_request(
         # Create disconnect checker with proper async support
         disconnect_checker = TTSClientDisconnectChecker(req_id, http_request, logger)
 
+        # Avoid stale stream-proxy fail-fast payloads from previous requests.
+        from api_utils.utils_ext.stream import clear_stream_queue
+
+        await clear_stream_queue()
+
         model_order = _build_tts_model_fallback_order(request.model)
 
         from api_utils.auth_manager import auth_manager
+
+        # Per-request account rotation (round-robin)
+        selected_profile = await auth_manager.get_next_profile_round_robin()
+        current_active_profile = os.environ.get("ACTIVE_AUTH_JSON_PATH")
+        needs_profile_switch = (
+            not current_active_profile
+            or os.path.basename(current_active_profile)
+            != os.path.basename(selected_profile)
+        )
+        if needs_profile_switch:
+            await _activate_auth_profile_for_tts(selected_profile, logger)
+        else:
+            logger.info(
+                f"[TTS] Reusing already-active round-robin profile: {os.path.basename(selected_profile)}"
+            )
 
         available_profiles = await auth_manager.get_available_profiles()
         max_auth_cycles = max(1, len(available_profiles) + 1)
@@ -225,7 +251,6 @@ async def process_tts_request(
             tried_profiles.append(current_profile or "current-session")
 
             exhausted_models: List[str] = []
-            switch_account_required = False
 
             # Re-read active page instance after profile switch
             page = state.page_instance
@@ -253,19 +278,16 @@ async def process_tts_request(
                     if audio_data:
                         break
                 except TTSGenerationError as tts_err:
-                    if tts_err.code == "tts_quota_exhausted":
+                    if tts_err.code == "tts_too_many_requests":
                         exhausted_models.append(model_id)
                         logger.warning(
-                            f"[TTS] Model quota exhausted: {model_id}, trying next model"
+                            f"[TTS] Upstream returned 429 for model {model_id}, trying next model"
                         )
                         continue
 
-                    if tts_err.code == "tts_auth_required":
-                        switch_account_required = True
-                        logger.warning("[TTS] Authentication invalid/expired detected, preparing account switch")
-                        break
-
                     status_by_code = {
+                        "tts_upstream_bad_request": 400,
+                        "tts_upstream_error": 502,
                         "tts_generation_timeout": 504,
                         "tts_navigation_failed": 502,
                         "tts_run_failed": 502,
@@ -273,12 +295,15 @@ async def process_tts_request(
                         "tts_generation_failed": 502,
                     }
                     status = status_by_code.get(tts_err.code, 500)
+                    error_type = "upstream_error"
+                    if status == 400:
+                        error_type = "invalid_request_error"
                     raise _make_tts_http_exception(
                         req_id,
                         status,
                         tts_err.code,
                         tts_err.message,
-                        "upstream_error",
+                        error_type,
                         extra={"model": model_id, **tts_err.details},
                     )
 
@@ -287,7 +312,7 @@ async def process_tts_request(
 
             all_models_exhausted = len(exhausted_models) == len(model_order)
 
-            if all_models_exhausted or switch_account_required:
+            if all_models_exhausted:
                 if auth_cycle + 1 >= max_auth_cycles:
                     raise _make_tts_http_exception(
                         req_id,

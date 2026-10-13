@@ -17,6 +17,7 @@ class AuthManager:
     def __init__(self) -> None:
         self.failed_profiles: Set[str] = set()
         self.current_profile: Optional[str] = None
+        self._round_robin_index: int = -1
 
         # Initialize with the profile from environment if available
         initial_profile = os.environ.get("ACTIVE_AUTH_JSON_PATH")
@@ -65,6 +66,22 @@ class AuthManager:
         next_profile = available[0]
         self.current_profile = next_profile
         logger.info(f"Switched to auth profile: {os.path.basename(next_profile)}")
+        return next_profile
+
+    async def get_next_profile_round_robin(self) -> str:
+        """Get the next profile in round-robin order (for per-request rotation)."""
+        profiles = await self.get_available_profiles()
+        if not profiles:
+            msg = "No authentication profiles available for round-robin rotation."
+            logger.critical(msg)
+            raise RuntimeError(msg)
+
+        self._round_robin_index = (self._round_robin_index + 1) % len(profiles)
+        next_profile = profiles[self._round_robin_index]
+        self.current_profile = next_profile
+        logger.info(
+            f"Round-robin selected auth profile: {os.path.basename(next_profile)}"
+        )
         return next_profile
 
     def mark_profile_failed(self, profile_path: Optional[str] = None) -> None:

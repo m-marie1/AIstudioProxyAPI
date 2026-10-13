@@ -173,8 +173,8 @@ Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, 等多种语音选择。
 
 ```bash
 # 单人语音合成
-curl -X POST http://127.0.0.1:2048/v1/audio/speech `
-  -H "Content-Type: application/json" `
+curl -X POST http://127.0.0.1:2048/v1/audio/speech \
+  -H "Content-Type: application/json" \
   -d '{
     "model": "gemini-2.5-pro-preview-tts",
     "input": "Hello, this is a test of text to speech.",
